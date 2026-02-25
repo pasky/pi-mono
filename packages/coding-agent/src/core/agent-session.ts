@@ -334,6 +334,23 @@ export class AgentSession {
 			}
 		}
 
+		// Eagerly create retry promise BEFORE the first await so that
+		// waitForRetry() — called synchronously after agent.prompt() resolves —
+		// can see it.  The agent's emit() calls this handler synchronously but
+		// does NOT await the returned Promise, so anything after the first
+		// `await` runs in a later microtask and is invisible to waitForRetry().
+		if (
+			event.type === "agent_end" &&
+			this._lastAssistantMessage &&
+			this._isRetryableError(this._lastAssistantMessage) &&
+			this.settingsManager.getRetrySettings().enabled &&
+			!this._retryPromise
+		) {
+			this._retryPromise = new Promise((resolve) => {
+				this._retryResolve = resolve;
+			});
+		}
+
 		// Emit to extensions first
 		await this._emitExtensionEvent(event);
 
@@ -2102,14 +2119,15 @@ export class AgentSession {
 		const settings = this.settingsManager.getRetrySettings();
 		if (!settings.enabled) return false;
 
-		this._retryAttempt++;
-
-		// Create retry promise on first attempt so waitForRetry() can await it
-		if (this._retryAttempt === 1 && !this._retryPromise) {
-			this._retryPromise = new Promise((resolve) => {
-				this._retryResolve = resolve;
-			});
+		// The retry promise must already exist — created synchronously in
+		// _handleAgentEvent before the first await, so waitForRetry() can see it.
+		if (!this._retryPromise) {
+			throw new Error(
+				"_handleRetryableError called without _retryPromise — retry promise must be created eagerly in _handleAgentEvent",
+			);
 		}
+
+		this._retryAttempt++;
 
 		if (this._retryAttempt > settings.maxRetries) {
 			// Max retries exceeded, emit final failure and reset
