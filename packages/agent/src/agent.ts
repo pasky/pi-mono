@@ -254,8 +254,8 @@ export class Agent {
 	}
 
 	/**
-	 * Queue a steering message to interrupt the agent mid-run.
-	 * Delivered after current tool execution, skips remaining tools.
+	 * Queue a steering message to inject before the next assistant response.
+	 * Delivered after the current tool phase completes.
 	 */
 	steer(m: AgentMessage) {
 		this.steeringQueue.push(m);

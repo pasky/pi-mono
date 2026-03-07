@@ -77,9 +77,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	/**
 	 * Returns steering messages to inject into the conversation mid-run.
 	 *
-	 * Called after each tool execution to check for user interruptions.
-	 * If messages are returned, remaining tool calls are skipped and
-	 * these messages are added to the context before the next LLM call.
+	 * Called after each turn completes, including after all tool calls in the
+	 * current tool phase have finished. Returned messages are added to the
+	 * context before the next assistant response.
 	 *
 	 * Use this for "steering" the agent while it's working.
 	 */

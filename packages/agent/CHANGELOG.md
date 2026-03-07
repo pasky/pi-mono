@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Steering messages now wait for the current tool batch to finish instead of skipping remaining tool calls ([#1883](https://github.com/badlogic/pi-mono/issues/1883))
+
 ## [0.57.1] - 2026-03-07
 
 ## [0.57.0] - 2026-03-07

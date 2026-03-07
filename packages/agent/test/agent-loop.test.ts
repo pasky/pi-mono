@@ -307,9 +307,10 @@ describe("agentLoop with AgentMessage", () => {
 		}
 	});
 
-	it("should inject queued messages and skip remaining tool calls", async () => {
+	it("should finish the current tool batch before injecting queued steering messages", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: string[] = [];
+		let interruptQueued = false;
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
 			label: "Echo",
@@ -317,6 +318,9 @@ describe("agentLoop with AgentMessage", () => {
 			parameters: toolSchema,
 			async execute(_toolCallId, params) {
 				executed.push(params.value);
+				if (params.value === "first") {
+					interruptQueued = true;
+				}
 				return {
 					content: [{ type: "text", text: `ok:${params.value}` }],
 					details: { value: params.value },
@@ -336,13 +340,13 @@ describe("agentLoop with AgentMessage", () => {
 		let queuedDelivered = false;
 		let callIndex = 0;
 		let sawInterruptInContext = false;
+		let secondCallMessages: Message[] = [];
 
 		const config: AgentLoopConfig = {
 			model: createModel(),
 			convertToLlm: identityConverter,
 			getSteeringMessages: async () => {
-				// Return steering message after first tool executes
-				if (executed.length === 1 && !queuedDelivered) {
+				if (interruptQueued && !queuedDelivered) {
 					queuedDelivered = true;
 					return [queuedUserMessage];
 				}
@@ -352,8 +356,8 @@ describe("agentLoop with AgentMessage", () => {
 
 		const events: AgentEvent[] = [];
 		const stream = agentLoop([userPrompt], context, config, undefined, (_model, ctx, _options) => {
-			// Check if interrupt message is in context on second call
 			if (callIndex === 1) {
+				secondCallMessages = ctx.messages;
 				sawInterruptInContext = ctx.messages.some(
 					(m) => m.role === "user" && typeof m.content === "string" && m.content === "interrupt",
 				);
@@ -362,7 +366,6 @@ describe("agentLoop with AgentMessage", () => {
 			const mockStream = new MockAssistantStream();
 			queueMicrotask(() => {
 				if (callIndex === 0) {
-					// First call: return two tool calls
 					const message = createAssistantMessage(
 						[
 							{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "first" } },
@@ -372,7 +375,6 @@ describe("agentLoop with AgentMessage", () => {
 					);
 					mockStream.push({ type: "done", reason: "toolUse", message });
 				} else {
-					// Second call: return final response
 					const message = createAssistantMessage([{ type: "text", text: "done" }]);
 					mockStream.push({ type: "done", reason: "stop", message });
 				}
@@ -385,32 +387,36 @@ describe("agentLoop with AgentMessage", () => {
 			events.push(event);
 		}
 
-		// Only first tool should have executed
-		expect(executed).toEqual(["first"]);
+		expect(executed).toEqual(["first", "second"]);
 
-		// Second tool should be skipped
 		const toolEnds = events.filter(
 			(e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end",
 		);
 		expect(toolEnds.length).toBe(2);
 		expect(toolEnds[0].isError).toBe(false);
-		expect(toolEnds[1].isError).toBe(true);
-		if (toolEnds[1].result.content[0]?.type === "text") {
-			expect(toolEnds[1].result.content[0].text).toContain("Skipped due to queued user message");
-		}
+		expect(toolEnds[1].isError).toBe(false);
 
-		// Queued message should appear in events
-		const queuedMessageEvent = events.find(
+		const queuedMessageEventIndex = events.findIndex(
 			(e) =>
 				e.type === "message_start" &&
 				e.message.role === "user" &&
 				typeof e.message.content === "string" &&
 				e.message.content === "interrupt",
 		);
-		expect(queuedMessageEvent).toBeDefined();
+		expect(queuedMessageEventIndex).toBeGreaterThan(-1);
 
-		// Interrupt message should be in context when second LLM call is made
+		const lastToolResultEventIndex = events.reduce((lastIndex, event, index) => {
+			return event.type === "message_end" && event.message.role === "toolResult" ? index : lastIndex;
+		}, -1);
+		expect(lastToolResultEventIndex).toBeGreaterThan(-1);
+		expect(queuedMessageEventIndex).toBeGreaterThan(lastToolResultEventIndex);
+
 		expect(sawInterruptInContext).toBe(true);
+		expect(secondCallMessages.filter((message) => message.role === "toolResult")).toHaveLength(2);
+		expect(secondCallMessages[secondCallMessages.length - 1]).toMatchObject({
+			role: "user",
+			content: "interrupt",
+		});
 	});
 });
 
