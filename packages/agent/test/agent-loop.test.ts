@@ -423,8 +423,8 @@ describe("agentLoop with AgentMessage", () => {
 			convertToLlm: identityConverter,
 			toolExecution: "sequential",
 			getSteeringMessages: async () => {
-				// Return steering message after first tool executes
-				if (executed.length === 1 && !queuedDelivered) {
+				// Return steering message after tool batch completes
+				if (executed.length > 0 && !queuedDelivered) {
 					queuedDelivered = true;
 					return [queuedUserMessage];
 				}
@@ -467,19 +467,16 @@ describe("agentLoop with AgentMessage", () => {
 			events.push(event);
 		}
 
-		// Only first tool should have executed
-		expect(executed).toEqual(["first"]);
+		// Both tools should have executed (steering is checked after the full batch)
+		expect(executed).toEqual(["first", "second"]);
 
-		// Second tool should be skipped
+		// Both tool calls should complete normally
 		const toolEnds = events.filter(
 			(e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end",
 		);
 		expect(toolEnds.length).toBe(2);
 		expect(toolEnds[0].isError).toBe(false);
-		expect(toolEnds[1].isError).toBe(true);
-		if (toolEnds[1].result.content[0]?.type === "text") {
-			expect(toolEnds[1].result.content[0].text).toContain("Skipped due to queued user message");
-		}
+		expect(toolEnds[1].isError).toBe(false);
 
 		// Queued message should appear in events
 		const queuedMessageEvent = events.find(
