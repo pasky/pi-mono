@@ -615,5 +615,3 @@ async function emitToolCallOutcome(
 	await emit({ type: "message_end", message: toolResultMessage });
 	return toolResultMessage;
 }
-
-
