@@ -213,7 +213,6 @@ async function runLoop(
 
 			await emit({ type: "turn_end", message, toolResults });
 
-			// Get steering messages after the full tool phase completes
 			pendingMessages = (await config.getSteeringMessages?.()) || [];
 		}
 

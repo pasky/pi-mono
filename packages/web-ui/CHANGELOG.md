@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.58.4] - 2026-03-16
+
 ### Added
 
 - `onModelSelect` callback on `AgentInterface` and `ChatPanel.setAgent` config
