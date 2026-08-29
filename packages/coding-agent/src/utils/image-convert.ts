@@ -71,12 +71,13 @@ let pngTranscoderLoad: Promise<boolean> | undefined;
 let pngTranscoderRegistered = false;
 
 /**
- * On Kitty-protocol terminals, register photon as pi-tui's image transcoder so non-PNG images render.
+ * On Kitty-protocol and sixel terminals, register photon as pi-tui's image transcoder so non-PNG images render.
  * Loads photon once. `onRegistered` runs after registration so callers can re-render images that
  * showed text fallbacks; it is not called if the transcoder was already registered or cannot load.
  */
 export function ensurePngTranscoder(onRegistered: () => void): void {
-	if (pngTranscoderRegistered || getCapabilities().images !== "kitty") return;
+	const protocol = getCapabilities().images;
+	if (pngTranscoderRegistered || (protocol !== "kitty" && protocol !== "sixel")) return;
 	pngTranscoderLoad ??= loadPngTranscoder().then((transcoder) => {
 		if (!transcoder) return false;
 		setImageTranscoder(transcoder);
