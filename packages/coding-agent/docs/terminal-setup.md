@@ -9,7 +9,7 @@ Pi auto-detects OSC 8 hyperlinks, inline image protocols, and truecolor. If dete
 | Capability | Environment variable | JSON setting |
 |------------|----------------------|--------------|
 | OSC 8 hyperlinks | `PI_HYPERLINKS=1\|0\|auto` | `terminal.hyperlinks: true\|false\|"auto"` |
-| Inline images | `PI_IMAGE_PROTOCOL=kitty\|iterm2\|none\|auto` | `terminal.images: "kitty"\|"iterm2"\|false\|"auto"` |
+| Inline images | `PI_IMAGE_PROTOCOL=kitty\|iterm2\|sixel\|none\|auto` | `terminal.images: "kitty"\|"iterm2"\|"sixel"\|false\|"auto"` |
 | Truecolor | `PI_TRUE_COLOR=1\|0\|auto` | `terminal.trueColor: true\|false\|"auto"` |
 
 Settings take precedence over environment variables; unset or `auto` preserves detection. Only force capabilities supported by the complete terminal path, since unsupported escape sequences can corrupt rendering.
