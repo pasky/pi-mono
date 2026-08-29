@@ -69,6 +69,11 @@
 ### Added
 
 - Added inline image rendering under tmux via sixel when tmux reports sixel support, in both regular and fullscreen TUI modes; `terminal.images`/`PI_IMAGE_PROTOCOL` accept `sixel` as an override.
+- Added a scroll position indicator at the right end of the fullscreen footer, shown only while the transcript is scrolled back.
+
+### Changed
+
+- Changed fullscreen mode to no longer capture mouse events, so terminal-native selection, scrolling, and link handling stay available.
 
 ## [0.84.4] - 2026-08-28
 

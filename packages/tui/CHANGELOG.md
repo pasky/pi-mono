@@ -35,6 +35,7 @@
 ### Added
 
 - Added inline image support under tmux via a built-in sixel encoder, enabled when tmux reports sixel in `client_termfeatures`; `PI_IMAGE_PROTOCOL` accepts `sixel` as an override. The alternate-screen renderer shows sixel images too, blanking blocks clipped at the viewport top instead of letting them paint over unrelated rows.
+- Added `ScrollView.contentHeight` and `ScrollView.maxScrollTop` getters for scroll position reporting.
 
 ## [0.84.4] - 2026-08-28
 

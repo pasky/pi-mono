@@ -51,6 +51,8 @@ export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
+	/** Returns the scroll position as a percentage, or undefined when the viewport is not scrolled back. */
+	private scrollPositionPercent: (() => number | undefined) | undefined;
 
 	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
 		this.session = session;
@@ -63,6 +65,10 @@ export class FooterComponent implements Component {
 
 	setAutoCompactEnabled(enabled: boolean): void {
 		this.autoCompactEnabled = enabled;
+	}
+
+	setScrollPositionProvider(provider: (() => number | undefined) | undefined): void {
+		this.scrollPositionPercent = provider;
 	}
 
 	/**
@@ -170,9 +176,19 @@ export class FooterComponent implements Component {
 
 		let statsLeftWidth = visibleWidth(statsLeft);
 
+		// The scroll position indicator (only shown when scrolled back) goes at the end of the last footer line
+		const extensionStatuses = this.footerData.getExtensionStatuses();
+		const scrollPercent = this.scrollPositionPercent?.();
+		let scrollText = scrollPercent === undefined ? "" : ` ${Math.round(scrollPercent)}%\u2191`;
+		// Drop the indicator when the footer is too narrow to also show any stats.
+		if (scrollText !== "" && visibleWidth(scrollText) + 8 > width) scrollText = "";
+		const scrollIndicator = scrollText === "" ? "" : theme.bold(theme.fg("warning", scrollText));
+		const scrollWidth = visibleWidth(scrollText);
+		const statsWidth = Math.max(1, width - (extensionStatuses.size > 0 ? 0 : scrollWidth));
+
 		// If statsLeft is too wide, truncate it
-		if (statsLeftWidth > width) {
-			statsLeft = truncateToWidth(statsLeft, width, "...");
+		if (statsLeftWidth > statsWidth) {
+			statsLeft = truncateToWidth(statsLeft, statsWidth, "...");
 			statsLeftWidth = visibleWidth(statsLeft);
 		}
 
@@ -191,7 +207,7 @@ export class FooterComponent implements Component {
 		let rightSide = rightSideWithoutProvider;
 		if (this.footerData.getAvailableProviderCount() > 1 && state.model) {
 			rightSide = `(${state.model!.provider}) ${rightSideWithoutProvider}`;
-			if (statsLeftWidth + minPadding + visibleWidth(rightSide) > width) {
+			if (statsLeftWidth + minPadding + visibleWidth(rightSide) > statsWidth) {
 				// Too wide, fall back
 				rightSide = rightSideWithoutProvider;
 			}
@@ -201,17 +217,17 @@ export class FooterComponent implements Component {
 		const totalNeeded = statsLeftWidth + minPadding + rightSideWidth;
 
 		let statsLine: string;
-		if (totalNeeded <= width) {
+		if (totalNeeded <= statsWidth) {
 			// Both fit - add padding to right-align model
-			const padding = " ".repeat(width - statsLeftWidth - rightSideWidth);
+			const padding = " ".repeat(statsWidth - statsLeftWidth - rightSideWidth);
 			statsLine = statsLeft + padding + rightSide;
 		} else {
 			// Need to truncate right side
-			const availableForRight = width - statsLeftWidth - minPadding;
+			const availableForRight = statsWidth - statsLeftWidth - minPadding;
 			if (availableForRight > 0) {
 				const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
 				const truncatedRightWidth = visibleWidth(truncatedRight);
-				const padding = " ".repeat(Math.max(0, width - statsLeftWidth - truncatedRightWidth));
+				const padding = " ".repeat(Math.max(0, statsWidth - statsLeftWidth - truncatedRightWidth));
 				statsLine = statsLeft + padding + truncatedRight;
 			} else {
 				// Not enough space for right side at all
@@ -230,14 +246,19 @@ export class FooterComponent implements Component {
 		const lines = [pwdLine, dimStatsLeft + dimRemainder];
 
 		// Add extension statuses on a single line, sorted by key alphabetically
-		const extensionStatuses = this.footerData.getExtensionStatuses();
 		if (extensionStatuses.size > 0) {
 			const sortedStatuses = Array.from(extensionStatuses.entries())
 				.sort(([a], [b]) => a.localeCompare(b))
 				.map(([, text]) => sanitizeStatusText(text));
 			const statusLine = sortedStatuses.join(" ");
 			// Truncate to terminal width with dim ellipsis for consistency with footer style
-			lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+			lines.push(truncateToWidth(statusLine, Math.max(1, width - scrollWidth), theme.fg("dim", "...")));
+		}
+
+		if (scrollIndicator) {
+			const lastIndex = lines.length - 1;
+			const padding = " ".repeat(Math.max(0, width - visibleWidth(lines[lastIndex]!) - scrollWidth));
+			lines[lastIndex] = lines[lastIndex]! + padding + scrollIndicator;
 		}
 
 		return lines;

@@ -887,6 +887,12 @@ export class InteractiveMode {
 		});
 		this.transcriptScrollView = viewport.transcript;
 		this.fullscreenLayoutRoot = viewport.root;
+		this.footer.setScrollPositionProvider(() => {
+			if (this.ui.mode !== "fullscreen") return undefined;
+			const scrollView = this.transcriptScrollView;
+			if (!scrollView || scrollView.isFollowingEnd || scrollView.maxScrollTop === 0) return undefined;
+			return (scrollView.scrollTop / scrollView.maxScrollTop) * 100;
+		});
 		this.mountInteractiveTui(this.renderer, [
 			this.documentContainer,
 			this.pendingMessagesContainer,
