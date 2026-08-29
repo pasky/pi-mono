@@ -1,6 +1,20 @@
 import type { Component, Terminal, TUI } from "@earendil-works/pi-tui";
-import { Container, getKeybindings, isViewportTUI, ScrollView, setKeybindings, Text } from "@earendil-works/pi-tui";
+import {
+	Container,
+	getKeybindings,
+	isViewportTUI,
+	ScrollView,
+	setCapabilities,
+	setKeybindings,
+	Text,
+} from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// Pin terminal capabilities so behavior does not depend on the host terminal:
+// an iterm2 capability makes the alt screen suppress images on start, which
+// adds an extra invalidation to the sequences asserted below.
+setCapabilities({ images: null, trueColor: true, hyperlinks: false });
+
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { FullscreenExitOutput, TuiMode } from "../src/core/settings-manager.ts";

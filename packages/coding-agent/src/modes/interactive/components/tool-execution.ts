@@ -205,12 +205,13 @@ export class ToolExecutionComponent extends Container {
 		this.result = result;
 		this.isPartial = isPartial;
 		this.updateDisplay();
-		this.maybeConvertImagesForKitty();
+		this.maybeConvertImagesForPngOnlyProtocols();
 	}
 
-	private maybeConvertImagesForKitty(): void {
+	/** Kitty and the sixel encoder only accept PNG payloads; convert other formats. */
+	private maybeConvertImagesForPngOnlyProtocols(): void {
 		const caps = getCapabilities();
-		if (caps.images !== "kitty") return;
+		if (caps.images !== "kitty" && caps.images !== "sixel") return;
 		if (!this.result) return;
 
 		const imageBlocks = this.result.content.filter((c) => c.type === "image");
@@ -380,7 +381,7 @@ export class ToolExecutionComponent extends Container {
 					const converted = this.convertedImages.get(i);
 					const imageData = converted?.data ?? img.data;
 					const imageMimeType = converted?.mimeType ?? img.mimeType;
-					if (caps.images === "kitty" && imageMimeType !== "image/png") continue;
+					if ((caps.images === "kitty" || caps.images === "sixel") && imageMimeType !== "image/png") continue;
 
 					const spacer = new Spacer(1);
 					this.addChild(spacer);

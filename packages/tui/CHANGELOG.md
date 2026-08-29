@@ -32,6 +32,10 @@
 - Fixed terminal startup under restricted seccomp policies that reject the `SIGWINCH` self-signal ([#8898](https://github.com/earendil-works/pi/pull/8898) by [@bartlomiejkida](https://github.com/bartlomiejkida)).
 - Fixed Zed terminal image capability detection ([#8828](https://github.com/earendil-works/pi/pull/8828) by [@Perlence](https://github.com/Perlence)).
 
+### Added
+
+- Added inline image support under tmux via a built-in sixel encoder, enabled when tmux reports sixel in `client_termfeatures`; `PI_IMAGE_PROTOCOL` accepts `sixel` as an override. The alternate-screen renderer shows sixel images too, blanking blocks clipped at the viewport top instead of letting them paint over unrelated rows.
+
 ## [0.84.4] - 2026-08-28
 
 ### Added

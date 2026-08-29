@@ -1905,4 +1905,43 @@ describe("TuiAltScreen", () => {
 		assert.ok(terminal.getViewport().some((line) => line.includes("↑ ↓")));
 		tui.stop();
 	});
+
+	it("blanks sixel blocks clipped at the viewport top", async () => {
+		setCapabilities({ images: "sixel", trueColor: true, hyperlinks: false });
+		try {
+			// A three-row sixel block as emitted by components/image.ts: two blank
+			// rows, then DECSC + cursor-up + the DCS payload + DECRC.
+			const sixelPayload = '\x1bP0;1;0q"1;1;8;18#0;2;0;0;0#0!8~\x1b\\';
+			const sixelLine = `\x1b7\x1b[2A${sixelPayload}\x1b8`;
+			const component = {
+				lines: ["", "", sixelLine, "below 1", "below 2", "below 3"],
+				render(): string[] {
+					return this.lines;
+				},
+				invalidate(): void {},
+			};
+
+			const terminal = new RecordingTerminal(20, 4);
+			const tui = new TuiAltScreen(terminal);
+			tui.addChild(component);
+			tui.start();
+			await terminal.waitForRender();
+
+			// Following the end shows content rows 2-5: the block's sequence line
+			// lands on screen row 0 with its two blank rows clipped above, so the
+			// payload must not be written.
+			const writesSoFar = () => terminal.events.flatMap((e) => (e.type === "write" ? [e.data] : [])).join("");
+			assert.ok(!writesSoFar().includes(sixelPayload));
+
+			// Scroll to the top: the whole block is visible and the payload paints.
+			terminal.sendInput("\x1b[<64;1;1M");
+			terminal.sendInput("\x1b[<64;1;1M");
+			await terminal.waitForRender();
+			assert.strictEqual(tui.viewportTop, 0);
+			assert.ok(writesSoFar().includes(sixelPayload));
+			tui.stop();
+		} finally {
+			resetCapabilitiesCache();
+		}
+	});
 });

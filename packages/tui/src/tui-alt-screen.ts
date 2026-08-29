@@ -23,12 +23,13 @@ import {
 	deleteAllKittyImages,
 	deleteAllKittyPlacements,
 	deleteKittyImage,
+	extractSixelImageRows,
 	getCapabilities,
 	getKittyImagePlacement,
 	type ImageProtocol,
 	isImageLine,
+	resetCapabilitiesCache,
 	setCapabilities,
-	type TerminalCapabilities,
 } from "./terminal-image.ts";
 import {
 	type Component,
@@ -206,7 +207,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private readonly flashes: AltScreenFlashContainer;
 	private altScreenActive = false;
 	private imageProtocol: ImageProtocol = null;
-	private savedCapabilities?: TerminalCapabilities;
+	private suppressedImages = false;
 	private readonly uploadedKittyImages = new Map<number, CachedKittyImage>();
 	private selectionAnchor?: SelectionPoint;
 	private selectionFocus?: SelectionPoint;
@@ -331,11 +332,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const capabilities = getCapabilities();
 		this.imageProtocol = capabilities.images;
 		this.uploadedKittyImages.clear();
-		if (capabilities.images === "iterm2") {
-			this.savedCapabilities = capabilities;
-			setCapabilities({ ...capabilities, images: null });
-			this.invalidate();
-		}
+		this.suppressUncroppableImages();
 		this.lastDocument = [];
 		this.selectionAnchor = undefined;
 		this.selectionFocus = undefined;
@@ -397,10 +394,44 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			buffer += `\x1b[0m${ENABLE_AUTOWRAP}\r\n\x1b[?25h${END_SYNCHRONIZED_OUTPUT}`;
 			this.terminal.write(buffer);
 		}
-		if (this.savedCapabilities) {
-			setCapabilities(this.savedCapabilities);
-			this.savedCapabilities = undefined;
+		if (this.suppressedImages) {
+			// Recompute from detection plus current overrides rather than restoring a
+			// snapshot, which could clobber overrides applied while we were active.
+			resetCapabilitiesCache();
+			this.suppressedImages = false;
 		}
+	}
+
+	/**
+	 * iTerm2 placements cannot be deleted or cropped during application-owned
+	 * scrolling, so fall back to text placeholders. (Sixel is handled
+	 * differently: tmux owns those cells and repaints them, so sixel images do
+	 * render here; blocks clipped at the viewport top are blanked instead, see
+	 * blankClippedSixelBlocks().) Re-checked on every render because a
+	 * setCapabilityOverrides() call resets the capability cache, which would
+	 * otherwise silently re-enable the protocol while we are active.
+	 */
+	private suppressUncroppableImages(): void {
+		const capabilities = getCapabilities();
+		if (capabilities.images !== "iterm2") return;
+		this.suppressedImages = true;
+		setCapabilities({ ...capabilities, images: null });
+		this.invalidate();
+	}
+
+	/**
+	 * A sixel block paints upward from its last line (see components/image.ts).
+	 * When the block's top rows are scrolled off above the viewport, the paint
+	 * would land on whatever content occupies the rows above it - or, when the
+	 * cursor-up jump clamps at the screen top, the image would paint downward
+	 * over unrelated rows. Blank such blocks; fully visible ones render fine
+	 * because tmux owns the covered cells and repaints them like text.
+	 */
+	private blankClippedSixelBlocks(screen: string[]): string[] {
+		return screen.map((line, row) => {
+			const rows = extractSixelImageRows(line);
+			return rows !== undefined && row - (rows - 1) < 0 ? "" : line;
+		});
 	}
 
 	private deleteKittyImages(): string {
@@ -1651,6 +1682,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	protected override doRender(): void {
 		if (this.stopped || !this.altScreenActive) return;
+		this.suppressUncroppableImages();
 		const width = Math.max(1, this.terminal.columns);
 		const height = Math.max(1, this.terminal.rows);
 		const root = this.layoutRoot ?? this.implicitScrollView;
@@ -1665,6 +1697,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		if (screen.length > height) screen = screen.slice(screen.length - height);
 		screen = this.applySelection(screen, nextLayout);
 		screen = this.compositeFlashes(screen, width, height);
+		screen = this.blankClippedSixelBlocks(screen);
 
 		const cursorPos = this.extractCursorPosition(screen, height);
 		screen = this.applyLineResets(screen).map((line) => {

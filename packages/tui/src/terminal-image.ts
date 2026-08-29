@@ -2,8 +2,9 @@ import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
+import { decodePng, encodeSixel, resizeImage, SIXEL_BAND_HEIGHT } from "./sixel.ts";
 
-export type ImageProtocol = "kitty" | "iterm2" | null;
+export type ImageProtocol = "kitty" | "iterm2" | "sixel" | null;
 
 export interface TerminalCapabilities {
 	images: ImageProtocol;
@@ -34,6 +35,13 @@ export interface ImageRenderOptions {
 let cachedCapabilities: TerminalCapabilities | null = null;
 let capabilityOverrides: Partial<TerminalCapabilities> = {};
 
+/**
+ * Cap sixel images at this pixel width. Sixel output grows with pixel area,
+ * and wide images blow through tmux's 1 MiB DCS budget, degrading to text
+ * placeholders; 800px keeps typical screenshots comfortably under it.
+ */
+const SIXEL_MAX_WIDTH_PX = 800;
+
 // Default cell dimensions - updated by TUI when terminal responds to query
 let cellDimensions: CellDimensions = { widthPx: 9, heightPx: 18 };
 
@@ -45,28 +53,95 @@ export function setCellDimensions(dims: CellDimensions): void {
 	cellDimensions = dims;
 }
 
-/**
- * Checks whether the attached tmux client forwards OSC 8 hyperlinks to the
- * outer terminal. tmux only re-emits them when its `client_termfeatures` lists
- * `hyperlinks`, and strips them otherwise. On any error fallbacks `false`.
- */
-function probeTmuxHyperlinks(): boolean {
+/** Lists the attached tmux client's `client_termfeatures`. On any error returns `[]`. */
+function probeTmuxTermFeatures(): string[] {
 	try {
 		const termfeatures = execSync("tmux display-message -p '#{client_termfeatures}'", {
 			encoding: "utf8",
 			timeout: 250,
 			stdio: ["ignore", "pipe", "ignore"],
 		});
-		return termfeatures
-			.split(",")
-			.map((feature) => feature.trim())
-			.includes("hyperlinks");
+		return termfeatures.split(",").map((feature) => feature.trim());
 	} catch {
-		return false;
+		return [];
 	}
 }
 
-function detectCapabilitiesFromEnvironment(tmuxForwardsHyperlink: () => boolean): TerminalCapabilities {
+/**
+ * Checks whether the attached tmux client forwards OSC 8 hyperlinks to the
+ * outer terminal. tmux only re-emits them when its `client_termfeatures` lists
+ * `hyperlinks`, and strips them otherwise. On any error fallbacks `false`.
+ */
+function probeTmuxHyperlinks(): boolean {
+	return probeTmuxTermFeatures().includes("hyperlinks");
+}
+
+/**
+ * Checks whether the attached tmux client's terminal can render sixel.
+ *
+ * NOTE: this is only half the requirement. It says nothing about whether the
+ * tmux *binary* was built with `--enable-sixel`: `tty_feature_sixel` is defined
+ * unconditionally in tmux's tty-features.c, while the parser is guarded by
+ * `ENABLE_SIXEL`, so a tmux without sixel support attached to a sixel-capable
+ * terminal still reports the feature. In that case tmux drops the DCS and the
+ * reserved rows render blank.
+ *
+ * The authoritative check is the primary device attributes reply: tmux answers
+ * `CSI ? 1 ; 2 ; 4 c` when built with sixel and `CSI ? 1 ; 2 c` otherwise (see
+ * input.c), the `4` being the sixel indicator. That requires a terminal
+ * round-trip through the TUI's query machinery rather than a subprocess.
+ */
+function probeTmuxSixel(): boolean {
+	return probeTmuxTermFeatures().includes("sixel");
+}
+
+let cachedTmuxCellDimensions: CellDimensions | null = null;
+
+/**
+ * tmux scales and positions sixel images using *its own* idea of the cell size
+ * (`window_cell_width`/`window_cell_height`, defaulting to 16x32), which need
+ * not match what the outer terminal reports to us via XTWINOPS. Geometry has to
+ * be computed in tmux's units or the image will not land on the rows the TUI
+ * reserved for it.
+ */
+export function getTmuxCellDimensions(): CellDimensions {
+	if (cachedTmuxCellDimensions) return cachedTmuxCellDimensions;
+	try {
+		const output = execSync("tmux display-message -p '#{window_cell_width},#{window_cell_height}'", {
+			encoding: "utf8",
+			timeout: 250,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		const [widthPx, heightPx] = output.trim().split(",").map(Number);
+		if (Number.isFinite(widthPx) && Number.isFinite(heightPx) && widthPx > 0 && heightPx > 0) {
+			cachedTmuxCellDimensions = { widthPx, heightPx };
+			return cachedTmuxCellDimensions;
+		}
+	} catch {
+		// fall through to tmux's compiled-in defaults
+	}
+	cachedTmuxCellDimensions = { widthPx: 16, heightPx: 32 };
+	return cachedTmuxCellDimensions;
+}
+
+/**
+ * Number of terminal rows tmux consumes for a sixel image of `heightPx`,
+ * mirroring `sixel_size_in_cells()`: exact division when the height is a whole
+ * number of cells, otherwise rounded up. Getting this wrong by one row shifts
+ * everything below the image.
+ *
+ * Note that tmux applies this to the height it *parsed*, which is rounded up to
+ * a whole number of six-row sixel bands, so callers must only ever hand it a
+ * height that is already a multiple of `SIXEL_BAND_HEIGHT`.
+ */
+export function sixelRowsForHeight(heightPx: number, cellHeightPx: number): number {
+	return Math.ceil((Math.ceil(heightPx / SIXEL_BAND_HEIGHT) * SIXEL_BAND_HEIGHT) / cellHeightPx);
+}
+
+function detectCapabilitiesFromEnvironment(
+	tmuxForwardsHyperlink: () => boolean,
+	tmuxSupportsSixel: () => boolean,
+): TerminalCapabilities {
 	const termProgram = process.env.TERM_PROGRAM?.toLowerCase() || "";
 	const terminalEmulator = process.env.TERMINAL_EMULATOR?.toLowerCase() || "";
 	const term = process.env.TERM?.toLowerCase() || "";
@@ -75,9 +150,20 @@ function detectCapabilitiesFromEnvironment(tmuxForwardsHyperlink: () => boolean)
 	const isWindowsConsole = process.platform === "win32";
 
 	// Emit OSC 8 hyperlinks only when tmux confirms it forwards.
-	// Image protocols are unreliable under tmux, so leave `images: null`.
+	//
+	// Images: the kitty and iTerm2 protocols are genuinely unusable here, since
+	// tmux passes those escapes through without understanding them, leaving the
+	// image in a layer the TUI's line diff cannot erase (see #4208). Sixel is
+	// different: tmux parses it and owns the resulting cells, so it repaints and
+	// clears correctly. Enable images only when tmux confirms sixel support.
+	// Caveat: tmux drops sixel images before reflow, so images scrolled into the
+	// history or surviving a resize leave blank cells behind.
 	if (process.env.TMUX || term.startsWith("tmux")) {
-		return { images: null, trueColor: hasTrueColorHint, hyperlinks: tmuxForwardsHyperlink() };
+		return {
+			images: tmuxSupportsSixel() ? "sixel" : null,
+			trueColor: hasTrueColorHint,
+			hyperlinks: tmuxForwardsHyperlink(),
+		};
 	}
 
 	// screen does not forward OSC 8 hyperlinks, so keep them off there.
@@ -136,14 +222,18 @@ function parseBooleanCapabilityOverride(value: string | undefined): boolean | un
 	return value === "1" ? true : value === "0" ? false : undefined;
 }
 
-export function detectCapabilities(tmuxForwardsHyperlink: () => boolean = probeTmuxHyperlinks): TerminalCapabilities {
+export function detectCapabilities(
+	tmuxForwardsHyperlink: () => boolean = probeTmuxHyperlinks,
+	tmuxSupportsSixel: () => boolean = probeTmuxSixel,
+): TerminalCapabilities {
 	const hyperlinks = parseBooleanCapabilityOverride(process.env.PI_HYPERLINKS);
 	const detected = detectCapabilitiesFromEnvironment(
 		hyperlinks === undefined ? tmuxForwardsHyperlink : () => hyperlinks,
+		tmuxSupportsSixel,
 	);
 	const imageProtocol = process.env.PI_IMAGE_PROTOCOL?.toLowerCase();
 	const images =
-		imageProtocol === "kitty" || imageProtocol === "iterm2"
+		imageProtocol === "kitty" || imageProtocol === "iterm2" || imageProtocol === "sixel"
 			? imageProtocol
 			: imageProtocol === "none" || imageProtocol === "0"
 				? null
@@ -170,6 +260,7 @@ export function getCapabilities(): TerminalCapabilities {
 
 export function resetCapabilitiesCache(): void {
 	cachedCapabilities = null;
+	cachedTmuxCellDimensions = null;
 }
 
 /** Override selected auto-detected capabilities. */
@@ -192,6 +283,20 @@ export function setCapabilities(caps: TerminalCapabilities): void {
 
 const KITTY_PREFIX = "\x1b_G";
 const ITERM2_PREFIX = "\x1b]1337;File=";
+// Sixel data arrives as a DCS string whose parameters end with `q`.
+const SIXEL_PATTERN = /\x1bP[0-9;]*q/;
+
+// A sixel image block is emitted as blank rows followed by a final line holding
+// an optional cursor-up jump and the DCS payload (see components/image.ts), so
+// the sequence sits at the *end* of the rows it covers.
+const SIXEL_BLOCK_PATTERN = /^\x1b7(?:\x1b\[(\d+)A)?\x1bP[0-9;]*q/;
+
+/** Rows covered by a sixel image whose sequence terminates on this line, if any. */
+export function extractSixelImageRows(line: string): number | undefined {
+	const match = SIXEL_BLOCK_PATTERN.exec(line);
+	if (!match) return undefined;
+	return match[1] ? Number(match[1]) + 1 : 1;
+}
 
 export function isImageLine(line: string): boolean {
 	// Fast path: sequence at line start (single-row images)
@@ -199,7 +304,7 @@ export function isImageLine(line: string): boolean {
 		return true;
 	}
 	// Slow path: sequence elsewhere (multi-row images have cursor-up prefix)
-	return line.includes(KITTY_PREFIX) || line.includes(ITERM2_PREFIX);
+	return line.includes(KITTY_PREFIX) || line.includes(ITERM2_PREFIX) || SIXEL_PATTERN.test(line);
 }
 
 /**
@@ -647,6 +752,48 @@ export function renderImage(
 			preserveAspectRatio: options.preserveAspectRatio ?? true,
 		});
 		return { sequence, columns: size.columns, rows: size.rows };
+	}
+
+	if (caps.images === "sixel") {
+		// Sixel carries raw pixels, so we downscale here rather than asking the
+		// terminal to do it. Under tmux all geometry must be in tmux's cell
+		// units; on a direct sixel terminal (e.g. forced via PI_IMAGE_PROTOCOL)
+		// use the terminal-reported cell size instead.
+		const term = process.env.TERM?.toLowerCase() || "";
+		const underTmux = Boolean(process.env.TMUX) || term.startsWith("tmux");
+		const cell = underTmux ? getTmuxCellDimensions() : getCellDimensions();
+		const decoded = decodePng(Buffer.from(base64Data, "base64"));
+		if (!decoded) return null;
+
+		const maxColumns = Math.max(1, Math.min(maxWidth, Math.floor(SIXEL_MAX_WIDTH_PX / cell.widthPx)));
+		const cellSize = calculateImageCellSize(imageDimensions, maxColumns, options.maxHeightCells, cell);
+		const scale = Math.min(
+			(cellSize.columns * cell.widthPx) / decoded.width,
+			(cellSize.rows * cell.heightPx) / decoded.height,
+			1,
+		);
+
+		// Snap the width to whole cells: any column of the final cell the image
+		// does not cover is filled by the terminal with the current background
+		// colour, which shows up as a bright band along the edge.
+		const columns = Math.max(1, Math.min(maxColumns, Math.round((decoded.width * scale) / cell.widthPx)));
+		const rows = Math.max(1, Math.round((decoded.height * scale) / cell.heightPx));
+		const targetWidth = columns * cell.widthPx;
+
+		// The height cannot simply be snapped to whole cells: tmux's parser writes
+		// six rows for every sixel band it sees (`sixel_parse_write()`), so an
+		// image whose height is not a multiple of six is rounded up to one, and
+		// tmux then reserves rows for the *rounded* height. Land on the largest
+		// multiple of six that still fits the block, so tmux's row count agrees
+		// with ours and at most five pixels of the last row go uncovered.
+		const targetHeight = Math.max(
+			SIXEL_BAND_HEIGHT,
+			Math.floor((rows * cell.heightPx) / SIXEL_BAND_HEIGHT) * SIXEL_BAND_HEIGHT,
+		);
+
+		const sequence = encodeSixel(resizeImage(decoded, targetWidth, targetHeight));
+		if (!sequence) return null;
+		return { sequence, columns, rows: sixelRowsForHeight(targetHeight, cell.heightPx) };
 	}
 
 	return null;

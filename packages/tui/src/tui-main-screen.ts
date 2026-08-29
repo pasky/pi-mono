@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { deleteKittyImage, isImageLine } from "./terminal-image.ts";
+import { deleteKittyImage, extractSixelImageRows, isImageLine } from "./terminal-image.ts";
 import { type TUI, TuiBase, type TuiStopOptions } from "./tui.ts";
 import { visibleWidth } from "./utils.ts";
 
@@ -207,15 +207,29 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		return reservedRows;
 	}
 
-	private expandChangedRangeForKittyImages(
+	private expandChangedRangeForImages(
 		firstChanged: number,
 		lastChanged: number,
 		newLines: string[],
 	): { firstChanged: number; lastChanged: number } {
 		let expandedFirstChanged = firstChanged;
 		let expandedLastChanged = lastChanged;
+		const expand = (blockStart: number, blockEnd: number): void => {
+			if (blockStart > lastChanged || blockEnd < firstChanged) return;
+			expandedFirstChanged = Math.min(expandedFirstChanged, blockStart);
+			expandedLastChanged = Math.max(expandedLastChanged, blockEnd);
+		};
 		const expandForLines = (lines: string[]): void => {
 			for (let i = 0; i < lines.length; i++) {
+				// tmux frees a sixel image as soon as any row it covers is written
+				// to, and will not redraw it for us. Whenever any part of the block
+				// is repainted we must therefore repaint the sequence itself,
+				// which lives on the block's last row.
+				const sixelRows = extractSixelImageRows(lines[i]);
+				if (sixelRows !== undefined) {
+					expand(i - sixelRows + 1, i);
+					continue;
+				}
 				if (extractKittyImageIds(lines[i]).length === 0) continue;
 				const blockEnd = i + this.getKittyImageReservedRows(lines, i) - 1;
 				if (i >= firstChanged || (i <= lastChanged && blockEnd >= firstChanged)) {
@@ -382,7 +396,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			lastChanged = newLines.length - 1;
 		}
 		if (firstChanged !== -1) {
-			const expandedRange = this.expandChangedRangeForKittyImages(firstChanged, lastChanged, newLines);
+			const expandedRange = this.expandChangedRangeForImages(firstChanged, lastChanged, newLines);
 			firstChanged = expandedRange.firstChanged;
 			lastChanged = expandedRange.lastChanged;
 		}
