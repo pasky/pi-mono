@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Added inline image rendering under tmux via sixel when tmux reports sixel support, in both regular and fullscreen TUI modes; `terminal.images`/`PI_IMAGE_PROTOCOL` accept `sixel` as an override.
+- Added a scroll position indicator at the right end of the fullscreen footer, shown only while the transcript is scrolled back.
+
+### Changed
+
+- Changed fullscreen mode to no longer capture mouse events, so terminal-native selection, scrolling, and link handling stay available.
+
 ## [0.85.1] - 2026-09-05
 
 ### New Features
@@ -65,15 +76,6 @@
 - Fixed the write tool reporting UTF-16 code-unit counts as byte counts by removing the misleading count ([#8979](https://github.com/earendil-works/pi/issues/8979)).
 - Fixed proxied plain-HTTP provider requests hanging after a tool call by tunneling them with CONNECT ([#8134](https://github.com/earendil-works/pi/issues/8134)).
 - Fixed RPC `abort` reporting success without cancelling an in-progress manual compaction ([#8920](https://github.com/earendil-works/pi/issues/8920)).
-
-### Added
-
-- Added inline image rendering under tmux via sixel when tmux reports sixel support, in both regular and fullscreen TUI modes; `terminal.images`/`PI_IMAGE_PROTOCOL` accept `sixel` as an override.
-- Added a scroll position indicator at the right end of the fullscreen footer, shown only while the transcript is scrolled back.
-
-### Changed
-
-- Changed fullscreen mode to no longer capture mouse events, so terminal-native selection, scrolling, and link handling stay available.
 
 ## [0.84.4] - 2026-08-28
 
